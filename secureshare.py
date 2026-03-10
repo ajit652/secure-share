@@ -1,46 +1,51 @@
 from flask import Flask, render_template, request, redirect, session, flash, send_file
 from pymongo import MongoClient
 from cryptography.fernet import Fernet
+from werkzeug.security import generate_password_hash, check_password_hash
+from bson.objectid import ObjectId
+
 import gridfs
-import io
 import hashlib
 import uuid
 import os
-from bson.objectid import ObjectId
+import io
 from datetime import datetime
-from werkzeug.security import generate_password_hash, check_password_hash
 
-# ---------------------------
+# ---------------------------------------------------
 # Encryption Key
-# ---------------------------
+# ---------------------------------------------------
 def load_key():
     if not os.path.exists("secret.key"):
         key = Fernet.generate_key()
         with open("secret.key", "wb") as f:
             f.write(key)
-    return open("secret.key", "rb").read()
+    with open("secret.key", "rb") as f:
+        return f.read()
 
-key = load_key()
-cipher = Fernet(key)
+cipher = Fernet(load_key())
 
-# ---------------------------
+# ---------------------------------------------------
 # Flask Setup
-# ---------------------------
+# ---------------------------------------------------
 app = Flask(__name__)
-app.secret_key = "supersecurekey"
+app.secret_key = os.environ.get("SECRET_KEY", "supersecurekey")
 
-# ---------------------------
+# ---------------------------------------------------
 # Admin Credentials
-# ---------------------------
-ADMIN_USERNAME = "ajit"
-ADMIN_PASSWORD = "Ajit@12345"
+# ---------------------------------------------------
+ADMIN_USERNAME = os.environ.get("ADMIN_USER", "ajit")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASS", "Ajit@12345")
 
-# ---------------------------
-# MongoDB Atlas Connection
-# ---------------------------
-MONGO_URI = "mongodb+srv://ajitsahoo9638705_db_user:Ajit%4012345@seecuresharecluster.ukow3lw.mongodb.net/?retryWrites=true&w=majority"
+# ---------------------------------------------------
+# MongoDB Connection
+# ---------------------------------------------------
+MONGO_URI = os.environ.get("MONGO_URI")
 
-client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+client = MongoClient(
+    MONGO_URI,
+    serverSelectionTimeoutMS=5000,
+    connectTimeoutMS=20000
+)
 
 db = client["ajitDB"]
 
@@ -50,16 +55,16 @@ users_collection = db["users"]
 files_collection = db["files"]
 downloads_collection = db["downloads"]
 
-# ---------------------------
+# ---------------------------------------------------
 # Home
-# ---------------------------
+# ---------------------------------------------------
 @app.route("/")
 def home():
     return redirect("/login")
 
-# ---------------------------
+# ---------------------------------------------------
 # Register
-# ---------------------------
+# ---------------------------------------------------
 @app.route("/register", methods=["GET","POST"])
 def register():
 
@@ -85,9 +90,9 @@ def register():
 
     return render_template("register.html")
 
-# ---------------------------
+# ---------------------------------------------------
 # Login
-# ---------------------------
+# ---------------------------------------------------
 @app.route("/login", methods=["GET","POST"])
 def login():
 
@@ -117,9 +122,9 @@ def login():
 
     return render_template("login.html")
 
-# ---------------------------
+# ---------------------------------------------------
 # User Dashboard
-# ---------------------------
+# ---------------------------------------------------
 @app.route("/dashboard")
 def dashboard():
 
@@ -129,11 +134,11 @@ def dashboard():
     user_id = session["user_id"]
 
     files = files_collection.find({
-        "$or":[
+        "$or": [
             {"receiver_id": user_id},
             {"uploader_id": user_id}
         ]
-    }).sort("timestamp",-1).limit(50)
+    }).sort("timestamp", -1).limit(50)
 
     return render_template(
         "index.html",
@@ -141,16 +146,18 @@ def dashboard():
         current_user=session["username"]
     )
 
-# ---------------------------
-# Upload
-# ---------------------------
+# ---------------------------------------------------
+# Upload File
+# ---------------------------------------------------
 @app.route("/upload", methods=["GET","POST"])
 def upload():
 
     if "user_id" not in session:
         return redirect("/login")
 
-    users = users_collection.find({"user_id":{"$ne": session["user_id"]}}).limit(50)
+    users = users_collection.find(
+        {"user_id": {"$ne": session["user_id"]}}
+    ).limit(50)
 
     if request.method == "POST":
 
@@ -163,6 +170,7 @@ def upload():
             return redirect("/upload")
 
         password_hash = None
+
         if password:
             password_hash = hashlib.sha256(password.encode()).hexdigest()
 
@@ -176,14 +184,14 @@ def upload():
             "uploader_id": session["user_id"],
             "receiver_id": receiver,
             "password": password_hash,
-            "timestamp": datetime.now()
+            "timestamp": datetime.utcnow()
         })
 
         downloads_collection.insert_one({
             "user_id": session["user_id"],
             "filename": file.filename,
             "action": "upload",
-            "timestamp": datetime.now()
+            "timestamp": datetime.utcnow()
         })
 
         flash("File uploaded successfully")
@@ -191,9 +199,9 @@ def upload():
 
     return render_template("upload.html", users=users)
 
-# ---------------------------
-# Download
-# ---------------------------
+# ---------------------------------------------------
+# Download File
+# ---------------------------------------------------
 @app.route("/download/<file_id>", methods=["GET","POST"])
 def download(file_id):
 
@@ -210,35 +218,41 @@ def download(file_id):
 
         if request.method == "POST":
 
-            entered = hashlib.sha256(request.form["password"].encode()).hexdigest()
+            entered_hash = hashlib.sha256(
+                request.form["password"].encode()
+            ).hexdigest()
 
-            if entered != file_info["password"]:
+            if entered_hash != file_info["password"]:
                 flash("Wrong password")
                 return redirect(request.url)
 
             grid_file = fs.get(file_info["file_id"])
-            decrypted = cipher.decrypt(grid_file.read())
+            decrypted_data = cipher.decrypt(grid_file.read())
 
             return send_file(
-                io.BytesIO(decrypted),
+                io.BytesIO(decrypted_data),
                 download_name=file_info["filename"],
                 as_attachment=True
             )
 
-        return render_template("download.html", file=file_info, password_required=True)
+        return render_template(
+            "download.html",
+            file=file_info,
+            password_required=True
+        )
 
     grid_file = fs.get(file_info["file_id"])
-    decrypted = cipher.decrypt(grid_file.read())
+    decrypted_data = cipher.decrypt(grid_file.read())
 
     return send_file(
-        io.BytesIO(decrypted),
+        io.BytesIO(decrypted_data),
         download_name=file_info["filename"],
         as_attachment=True
     )
 
-# ---------------------------
-# Delete
-# ---------------------------
+# ---------------------------------------------------
+# Delete File
+# ---------------------------------------------------
 @app.route("/delete/<file_id>")
 def delete(file_id):
 
@@ -261,25 +275,24 @@ def delete(file_id):
     flash("File deleted")
     return redirect("/dashboard")
 
-# ---------------------------
+# ---------------------------------------------------
 # History
-# ---------------------------
+# ---------------------------------------------------
 @app.route("/history")
 def history():
 
     if "user_id" not in session:
         return redirect("/login")
 
-    logs = downloads_collection.find({
-        "user_id": session["user_id"]
-    }).sort("timestamp",-1).limit(50)
+    logs = downloads_collection.find(
+        {"user_id": session["user_id"]}
+    ).sort("timestamp", -1).limit(50)
 
     return render_template("history.html", logs=logs)
 
-# ===========================
-# ADMIN DASHBOARD
-# ===========================
-
+# ---------------------------------------------------
+# Admin Dashboard
+# ---------------------------------------------------
 @app.route("/admin_dashboard")
 def admin_dashboard():
 
@@ -304,27 +317,22 @@ def admin_dashboard():
         log_count=log_count
     )
 
-# ---------------------------
-# Admin Logout
-# ---------------------------
-@app.route("/admin_logout")
-def admin_logout():
-
-    session.clear()
-    return redirect("/login")
-
-# ---------------------------
+# ---------------------------------------------------
 # Logout
-# ---------------------------
+# ---------------------------------------------------
 @app.route("/logout")
 def logout():
-
     session.clear()
     flash("Logged out")
     return redirect("/login")
 
-# ---------------------------
-# Run Flask
-# ---------------------------
+@app.route("/admin_logout")
+def admin_logout():
+    session.clear()
+    return redirect("/login")
+
+# ---------------------------------------------------
+# Run App
+# ---------------------------------------------------
 if __name__ == "__main__":
-    app.run()
+    app.run(host="0.0.0.0", port=5000)
