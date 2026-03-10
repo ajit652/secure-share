@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Download File{% endblock %}
+{% block content %}
+<div class="card p-4 mx-auto" style="max-width: 400px;">
+    <h3 class="text-center mb-3">Download {{ file.filename }}</h3>
+
+    {% if password_required %}
+    <form method="POST">
+        <div class="mb-3">
+            <label class="form-label">Enter File Password</label>
+            <input type="password" name="password" class="form-control" required>
+        </div>
+        <button type="submit" class="btn btn-success btn-custom w-100">Download</button>
+    </form>
+    {% else %}
+    <p class="text-center text-success">This file has no password. Click below to download.</p>
+    <a href="" class="btn btn-success btn-custom w-100">Download Now</a>
+    {% endif %}
+</div>
+{% endblock %}
